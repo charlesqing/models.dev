@@ -1,7 +1,7 @@
 /** @jsx jsx */
 /** @jsxImportSource hono/jsx */
 
-import { generateCatalog } from "@models.dev/core";
+import { generateCatalog, loadToml } from "@models.dev/core";
 import type { Model, ModelMetadata, Provider } from "@models.dev/core";
 import { Fragment } from "hono/jsx";
 import { renderToString } from "hono/jsx/dom/server";
@@ -163,11 +163,11 @@ async function loadProviderBaseModelRefs(root: string) {
     }
 
     const modelId = modelParts.join("/").slice(0, -5);
-    const toml = await import(modelPath, {
-      with: {
-        type: "toml",
-      },
-    }).then((mod) => mod.default as { base_model?: unknown });
+    const toml = await loadToml(modelPath, modelId);
+    if (toml === null) {
+      console.warn(`[render] skipping provider model (dangling alias): ${modelPath}`);
+      continue;
+    }
 
     if (typeof toml.base_model === "string") {
       refs.set(`${providerId}/${modelId}`, toml.base_model);

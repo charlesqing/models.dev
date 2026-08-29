@@ -11,6 +11,56 @@ import {
   ModelMetadata,
 } from "./schema.js";
 
+/**
+ * Loads a model TOML, transparently resolving "alias" files. An alias file
+ * contains a single relative path (e.g. `../../zai/models/glm-4.7.toml`)
+ * pointing at another provider's model definition instead of inline TOML.
+ * Resolution is transitive and guards against cycles.
+ */
+/**
+ * Returns the parsed model TOML, or `null` when the (possibly aliased) file
+ * resolves to a missing target (a dangling alias). Dangling aliases are
+ * skipped with a warning instead of crashing the whole catalog build.
+ */
+export async function loadToml(
+  filePath: string,
+  modelID: string,
+): Promise<Record<string, unknown> | null> {
+  let current = filePath;
+  const visited = new Set<string>();
+  while (true) {
+    if (visited.has(current)) {
+      throw new Error(`Alias cycle detected at ${current}`, {
+        cause: { modelPath: filePath },
+      });
+    }
+    visited.add(current);
+
+    if (!existsSync(current)) {
+      return null;
+    }
+
+    const text = (await Bun.file(current).text()).trim();
+    if (isAlias(text)) {
+      current = path.resolve(path.dirname(current), text);
+      continue;
+    }
+
+    const toml = await import(current, {
+      with: { type: "toml" },
+    }).then((mod) => mod.default);
+    toml.id = modelID;
+    return toml;
+  }
+}
+
+function isAlias(text: string): boolean {
+  if (text.includes("\n") || text.includes("=") || text.includes("[")) {
+    return false;
+  }
+  return /^\.\.?\/.*\.toml$/i.test(text);
+}
+
 const BaseModel = AuthoredModelShape
   .deepPartial()
   .extend({
@@ -40,12 +90,11 @@ export async function generateModels(directory: string) {
     followSymlinks: true,
   })) {
     const modelID = path.relative(directory, modelPath).split(path.sep).join("/").slice(0, -5);
-    const toml = await import(modelPath, {
-      with: {
-        type: "toml",
-      },
-    }).then((mod) => mod.default);
-    toml.id = modelID;
+    const toml = await loadToml(modelPath, modelID);
+    if (toml === null) {
+      console.warn(`[generate] skipping model (dangling alias): ${modelPath}`);
+      continue;
+    }
 
     const model = ModelMetadata.safeParse(toml);
     if (!model.success) {
@@ -90,9 +139,8 @@ async function generateProviders(
 
     const modelsPath = path.join(directory, providerID, "models");
     if (!existsSync(modelsPath)) {
-      throw new Error(`Provider "${providerID}" has no models`, {
-        cause: { providerPath },
-      });
+      console.warn(`[generate] skipping provider "${providerID}" (no models directory)`);
+      continue;
     }
     for await (const modelPath of new Bun.Glob("**/*.toml").scan({
       cwd: modelsPath,
@@ -100,12 +148,11 @@ async function generateProviders(
       followSymlinks: true,
     })) {
       const modelID = path.relative(modelsPath, modelPath).split(path.sep).join("/").slice(0, -5);
-      const toml = await import(modelPath, {
-        with: {
-          type: "toml",
-        },
-      }).then((mod) => mod.default);
-      toml.id = modelID;
+      const toml = await loadToml(modelPath, modelID);
+      if (toml === null) {
+        console.warn(`[generate] skipping provider model (dangling alias): ${modelPath}`);
+        continue;
+      }
       if (toml.base_model !== undefined) {
         const baseModel = BaseModel.safeParse(toml);
         if (!baseModel.success) {
