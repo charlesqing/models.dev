@@ -1,0 +1,17 @@
+name = "models-dev"
+main = "packages/function/src/worker.ts"
+compatibility_date = "2025-08-01"
+
+# Static frontend built by packages/web/script/build.ts -> packages/web/dist
+assets = { directory = "./packages/web/dist", binding = "ASSETS" }
+
+# The worker reads these as JSON.parse(env.X).value (see packages/function/src/worker.ts).
+# They are PostHog / datalake analytics tokens. Empty values are safe (no tracking).
+# For production, set them as real Secrets in the Cloudflare dashboard instead of [vars]:
+#   npx wrangler secret put PosthogToken   # value: {"value":"..."}
+#   npx wrangler secret put LakeUrl         # value: {"value":"..."}
+#   npx wrangler secret put LakeSecret      # value: {"value":"..."}
+[vars]
+PosthogToken = "{ \"value\": \"\" }"
+LakeUrl = "{ \"value\": \"\" }"
+LakeSecret = "{ \"value\": \"\" }"
