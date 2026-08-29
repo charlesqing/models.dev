@@ -4,6 +4,11 @@ import { RenderedPages, Providers, Models, renderDocument } from "../src/render"
 import fs from "fs/promises";
 import path from "path";
 
+// The script uses paths relative to packages/web (./index.html, ../../providers, …).
+// Pin cwd to this script's parent dir so it works no matter where `bun run build` is invoked from
+// (e.g. the repo root on Cloudflare, which otherwise can't resolve ./index.html).
+process.chdir(path.join(import.meta.dir, ".."));
+
 await fs.rm("./dist", { recursive: true, force: true });
 await Bun.build({
   entrypoints: ["./index.html"],
