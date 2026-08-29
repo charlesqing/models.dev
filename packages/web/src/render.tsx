@@ -110,9 +110,9 @@ const LAB_NAME_OVERRIDES: Record<string, string> = {
 };
 
 const DEFAULT_PAGE_METADATA: PageMetadata = {
-  title: "Models.dev - An open-source database of AI models",
+  title: "modelprices - An open-source database of AI models",
   description:
-    "Models.dev is a comprehensive open-source database of AI model specifications, pricing, and features.",
+    "modelprices is a comprehensive open-source database of AI model specifications, pricing, and features.",
 };
 
 const ModelEntries = buildModelEntries();
@@ -480,7 +480,7 @@ function renderPage(
 function modelPageMetadata(model: ModelEntry): PageMetadata {
   const metadata = model.metadata;
   const providerCount = model.providers.length;
-  const title = `${metadata.name} pricing, providers, and specs | Models.dev`;
+  const title = `${metadata.name} pricing, providers, and specs | modelprices`;
   const context = metadata.limit?.context
     ? `${formatNumber(metadata.limit.context)} token context`
     : undefined;
@@ -518,7 +518,7 @@ function providerPageMetadata(
   provider: CatalogProvider,
   models: ProviderModelEntry[],
 ): PageMetadata {
-  const title = `${provider.name} models, pricing, and API docs | Models.dev`;
+  const title = `${provider.name} models, pricing, and API docs | modelprices`;
   const labs = new Set<string>();
   for (const entry of models) {
     if (entry.canonical?.labName) labs.add(entry.canonical.labName);
@@ -532,7 +532,7 @@ function providerPageMetadata(
         : undefined;
   const description = compactMetadataDescription(
     [
-      `Browse ${plural(models.length, `${provider.name} model`)} on Models.dev.`,
+      `Browse ${plural(models.length, `${provider.name} model`)} on modelprices.`,
       factSentence([
         labSummary,
         `pricing`,
@@ -550,7 +550,7 @@ function providerPageMetadata(
 }
 
 function labPageMetadata(lab: LabEntry): PageMetadata {
-  const title = `${lab.name} models, providers, and specs | Models.dev`;
+  const title = `${lab.name} models, providers, and specs | modelprices`;
   const description = compactMetadataDescription(
     [
       lab.description,
@@ -618,7 +618,7 @@ function Header(props: { active: ActiveSection }) {
     <header>
       <div class="left">
         <a class="brand" href="/">
-          <h1>Models.dev</h1>
+          <h1>modelprices</h1>
         </a>
         <span class="slash"></span>
         <p>An open-source database of AI models</p>
@@ -642,7 +642,7 @@ function Header(props: { active: ActiveSection }) {
           class="github"
           target="_blank"
           rel="noopener noreferrer"
-          href="https://github.com/sst/models.dev"
+          href="https://github.com/charlesqing/models.dev"
           aria-label="GitHub"
         >
           <svg
@@ -1389,7 +1389,7 @@ function MobileMenu(props: { active: "models" | "providers" | "labs" }) {
         <a
           target="_blank"
           rel="noopener noreferrer"
-          href="https://github.com/sst/models.dev"
+          href="https://github.com/charlesqing/models.dev"
         >
           GitHub
         </a>
@@ -1485,7 +1485,7 @@ function HelpDialog() {
       </div>
       <div class="body">
         <p>
-          <a href="/">Models.dev</a> is a comprehensive open-source database of
+          <a href="/">modelprices</a> is a comprehensive open-source database of
           AI model specifications, pricing, and features.
         </p>
         <p>
@@ -1501,17 +1501,17 @@ function HelpDialog() {
         </p>
         <div class="code-block">
           <code>
-            curl <a href="/api.json">https://models.dev/api.json</a>
+            curl <a href="/api.json">https://modelprices.dev/api.json</a>
           </code>
         </div>
         <div class="code-block">
           <code>
-            curl <a href="/models.json">https://models.dev/models.json</a>
+            curl <a href="/models.json">https://modelprices.dev/models.json</a>
           </code>
         </div>
         <div class="code-block">
           <code>
-            curl <a href="/catalog.json">https://models.dev/catalog.json</a>
+            curl <a href="/catalog.json">https://modelprices.dev/catalog.json</a>
           </code>
         </div>
         <h2>Logos</h2>
@@ -1524,7 +1524,7 @@ function HelpDialog() {
           <code>
             curl{" "}
             <a href="/logos/anthropic.svg">
-              https://models.dev/logos/anthropic.svg
+              https://modelprices.dev/logos/anthropic.svg
             </a>
           </code>
         </div>
@@ -1545,7 +1545,7 @@ function HelpDialog() {
         <p>
           The data is stored in{" "}
           <a
-            href="https://github.com/anomalyco/models.dev"
+            href="https://github.com/charlesqing/models.dev"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -1556,7 +1556,7 @@ function HelpDialog() {
       </div>
       <div class="footer">
         <a
-          href="https://github.com/sst/models.dev"
+          href="https://github.com/charlesqing/models.dev"
           target="_blank"
           rel="noopener noreferrer"
         >
