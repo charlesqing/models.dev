@@ -19,8 +19,9 @@ import {
  */
 /**
  * Returns the parsed model TOML, or `null` when the (possibly aliased) file
- * resolves to a missing target (a dangling alias). Dangling aliases are
- * skipped with a warning instead of crashing the whole catalog build.
+ * resolves to a missing target (a dangling alias) or fails to parse.
+ * Dangling aliases and unparseable files are skipped with a warning instead
+ * of crashing the whole catalog build.
  */
 export async function loadToml(
   filePath: string,
@@ -46,9 +47,17 @@ export async function loadToml(
       continue;
     }
 
-    const toml = await import(current, {
-      with: { type: "toml" },
-    }).then((mod) => mod.default);
+    let toml: Record<string, unknown>;
+    try {
+      toml = await import(current, {
+        with: { type: "toml" },
+      }).then((mod) => mod.default);
+    } catch (err) {
+      console.warn(
+        `Skipping ${current}: failed to parse TOML (${String(err instanceof Error ? err.message : err)})`,
+      );
+      return null;
+    }
     toml.id = modelID;
     return toml;
   }
