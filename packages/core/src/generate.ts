@@ -186,6 +186,17 @@ async function generateProviders(
       provider.data.models[modelID] = normalizeModelCost(model.data);
     }
     if (Object.keys(provider.data.models).length === 0) {
+      // On Windows/NTFS, ':'-named model files/dirs cannot be materialized on
+      // disk, so an all-colon provider (e.g. synthetic) legitimately ends up
+      // empty here. Skip it with a warning instead of failing the whole
+      // catalog build. On Linux/macOS (and Cloudflare) the original throw is
+      // kept so genuine empty-provider regressions still fail loudly.
+      if (process.platform === "win32") {
+        console.warn(
+          `[generate] skipping provider "${providerID}" (no models materialized on Windows/NTFS)`,
+        );
+        continue;
+      }
       throw new Error(`Provider "${providerID}" has no models`, {
         cause: { providerPath },
       });
