@@ -1,8 +1,8 @@
 /** @jsx jsx */
 /** @jsxImportSource hono/jsx */
 
-import { generateCatalog, loadToml } from "@models.dev/core";
-import type { Model, ModelMetadata, Provider } from "@models.dev/core";
+   import { generateCatalog, loadToml, logoErrors, readLabMetadata } from "@models.dev/core";
+   import type { LabMetadataV2, Model, ModelMetadata, Provider } from "@models.dev/core";
 import { Fragment } from "hono/jsx";
 import { renderToString } from "hono/jsx/dom/server";
 import { existsSync, readFileSync, readdirSync } from "fs";
@@ -27,7 +27,6 @@ const Catalog = await generateCatalog(root);
 export const Models = Catalog.models;
 export const Providers = Catalog.providers;
 
-const BaseModelRefs = await loadProviderBaseModelRefs(root);
 const LabMetadata = loadLabMetadata(root);
 const ProviderLogoSvgs = new Map<string, string>();
 const LabLogoSvgs = new Map<string, string>();
@@ -127,6 +126,7 @@ const SearchItems = buildSearchItems(
 
 export const RenderedPages = buildPages();
 export const Rendered = RenderedPages.get("/")!.html;
+export const SearchIndexJson = JSON.stringify(SearchItems);
 
 export function normalizeRoute(pathname: string) {
   if (pathname !== "/" && pathname.endsWith("/")) {
@@ -205,6 +205,7 @@ function buildProviderModelEntries(models: Map<string, ModelEntry>) {
         models,
         providerId,
         modelId,
+        model,
       );
 
       entries.push({
@@ -397,8 +398,9 @@ function resolveCanonicalModelId(
   models: Map<string, ModelEntry>,
   providerId: string,
   modelId: string,
+  model: CatalogProviderModel,
 ) {
-  const baseModelId = BaseModelRefs.get(`${providerId}/${modelId}`);
+  const baseModelId = model.canonical_model_id;
   if (baseModelId && models.has(baseModelId)) return baseModelId;
   if (models.has(modelId)) return modelId;
 
@@ -469,7 +471,7 @@ function renderPage(
         <Header active={active} />
         <main class="page-scroll">{content}</main>
         <MobileMenu active={active} />
-        <SearchDialog items={SearchItems} />
+        <SearchDialog />
         <HelpDialog />
       </Fragment>,
     ),
@@ -663,7 +665,7 @@ function Header(props: { active: ActiveSection }) {
             id="search-trigger"
             class="search-trigger"
             aria-label="Search"
-            aria-keyshortcuts="Control+F Meta+F Control+K Meta+K"
+            aria-keyshortcuts="Control+K Meta+K"
             aria-haspopup="dialog"
             aria-controls="search-modal"
           >
@@ -684,7 +686,7 @@ function Header(props: { active: ActiveSection }) {
               </svg>
               <span>Search</span>
             </span>
-            <span class="search-shortcut">Ctrl F</span>
+            <span class="search-shortcut">Ctrl K</span>
           </button>
         </div>
         <button id="help">How to use</button>
@@ -734,9 +736,10 @@ function ProvidersPage(props: { providers: Array<[string, CatalogProvider]> }) {
         hideHeading
       >
         <table data-enhanced-table>
+          <caption class="sr-only">Providers</caption>
           <thead>
             <tr>
-              <SortableTh>Provider</SortableTh>
+              <SortableTh sort="ascending">Provider</SortableTh>
               <SortableTh type="number">Models</SortableTh>
               <SortableTh>Package</SortableTh>
               <SortableTh>API</SortableTh>
@@ -751,19 +754,19 @@ function ProvidersPage(props: { providers: Array<[string, CatalogProvider]> }) {
 
               return (
                 <tr data-search={`${provider.name} ${providerId} ${provider.npm} ${provider.api ?? ""}`}>
-                  <td data-sort={provider.name}>
+                  <th scope="row" data-sort={provider.name}>
                     <ProviderLink providerId={providerId} provider={provider} />
-                  </td>
-                  <td data-sort={String(models.length)}>{models.length}</td>
+                  </th>
+                  <td class="numeric" data-sort={String(models.length)}>{models.length}</td>
                   <td class="mono">{provider.npm}</td>
-                  <td class="mono">
+                  <td class="mono" data-sort={provider.api ?? ""}>
                     {provider.api ? (
                       <CopyValue value={provider.api} copyValue={provider.api} />
                     ) : (
                       "-"
                     )}
                   </td>
-                  <td>
+                  <td data-sort={provider.doc}>
                     <a href={provider.doc} target="_blank" rel="noopener noreferrer">
                       Docs
                     </a>
@@ -782,9 +785,10 @@ function LabsPage(props: { labs: LabEntry[] }) {
   return (
       <TableSection title="Labs" count={props.labs.length} columns={5} hideHeading>
         <table data-enhanced-table>
+          <caption class="sr-only">Labs</caption>
           <thead>
             <tr>
-              <SortableTh>Lab</SortableTh>
+              <SortableTh sort="ascending">Lab</SortableTh>
               <SortableTh>Description</SortableTh>
               <SortableTh type="number">Models</SortableTh>
               <SortableTh type="number">Providers</SortableTh>
@@ -794,13 +798,13 @@ function LabsPage(props: { labs: LabEntry[] }) {
           <tbody>
             {props.labs.map((lab) => (
               <tr data-search={`${lab.name} ${lab.description ?? ""} ${lab.id} ${lab.families.join(" ")}`}>
-                <td data-sort={lab.name}>
+                <th scope="row" data-sort={lab.name}>
                   <LabLink labId={lab.id} labName={lab.name} />
                   <span class="subtle mono">{lab.id}</span>
-                </td>
-                <td>{lab.description ?? "-"}</td>
-                <td data-sort={String(lab.models.length)}>{lab.models.length}</td>
-                <td data-sort={String(lab.providerCount)}>{lab.providerCount}</td>
+                </th>
+                <td data-sort={lab.description ?? ""}>{lab.description ?? "-"}</td>
+                <td class="numeric" data-sort={String(lab.models.length)}>{lab.models.length}</td>
+                <td class="numeric" data-sort={String(lab.providerCount)}>{lab.providerCount}</td>
                 <td data-sort={sortDate(lab.lastUpdated)}>{lab.lastUpdated ?? "-"}</td>
               </tr>
             ))}
@@ -1007,6 +1011,7 @@ function ModelTable(props: {
       hideHeading={props.hideHeading}
     >
       <table data-enhanced-table>
+        <caption class="sr-only">{props.title}</caption>
         <thead>
           <tr>
             <SortableTh>Model</SortableTh>
@@ -1022,7 +1027,7 @@ function ModelTable(props: {
             <SortableTh>Weights</SortableTh>
             <SortableTh type="number">Price</SortableTh>
             <SortableTh>Release</SortableTh>
-            <SortableTh>Updated</SortableTh>
+            <SortableTh sort="descending">Updated</SortableTh>
           </tr>
         </thead>
         <tbody>
@@ -1033,33 +1038,30 @@ function ModelTable(props: {
               <tr
                 data-search={`${metadata.name} ${metadata.description} ${model.id} ${model.labName} ${metadata.family ?? ""} ${weightsText(metadata.open_weights)} ${booleanText(metadata.reasoning)} ${booleanText(metadata.tool_call)} ${booleanText(metadata.structured_output)} ${booleanText(metadata.temperature)}`}
               >
-                <td data-sort={metadata.name}>
+                <th scope="row" data-sort={metadata.name}>
                   <a class="primary-link" href={modelHref(model.id)}>
                     {metadata.name}
                   </a>
                   <span class="subtle mono">{model.id}</span>
-                </td>
+                </th>
                 {showLab && (
                   <td data-sort={model.labName}>
                     <LabLink labId={model.labId} labName={model.labName} />
                   </td>
                 )}
-                <td data-sort={String(model.providers.length)}>
+                <td class="numeric" data-sort={String(model.providers.length)}>
                   <a href={`${modelHref(model.id)}#providers`}>
                     {model.providers.length}
                   </a>
                 </td>
-                <td data-sort={sortNumber(metadata.limit?.context)}>
+                <td class="numeric" data-sort={sortNumber(metadata.limit?.context)}>
                   {formatNumber(metadata.limit?.context)}
                 </td>
-                <td data-sort={sortNumber(metadata.limit?.output)}>
+                <td class="numeric" data-sort={sortNumber(metadata.limit?.output)}>
                   {formatNumber(metadata.limit?.output)}
                 </td>
                 <td
-                  data-sort={[
-                    ...(metadata.modalities?.input ?? []),
-                    ...(metadata.modalities?.output ?? []),
-                  ].join(" ")}
+                  data-sort={(metadata.modalities?.input ?? []).join(" ")}
                   dangerouslySetInnerHTML={{
                     __html: renderModalities(metadata.modalities?.input),
                   }}
@@ -1079,7 +1081,7 @@ function ModelTable(props: {
                 <td data-sort={weightsText(metadata.open_weights)}>
                   <WeightsValue metadata={metadata} />
                 </td>
-                <td data-sort={sortNumber(model.minInputCost)}>
+                <td class="numeric" data-sort={sortNumber(model.minInputCost)}>
                   {costSummary(model.minInputCost, model.minOutputCost)}
                 </td>
                 <td data-sort={sortDate(metadata.release_date)}>
@@ -1108,12 +1110,13 @@ function ProviderModelsTable(props: {
 
   return (
     <table data-enhanced-table>
+      <caption class="sr-only">{props.mode === "model" ? "Providers" : "Models"}</caption>
       <thead>
         <tr>
           {props.mode === "model" ? (
-            <SortableTh>Provider</SortableTh>
+            <SortableTh sort="ascending">Provider</SortableTh>
           ) : (
-            <SortableTh>Model</SortableTh>
+            <SortableTh sort="ascending">Model</SortableTh>
           )}
           {showLab && <SortableTh>Lab</SortableTh>}
           <SortableTh>Model ID</SortableTh>
@@ -1139,11 +1142,11 @@ function ProviderModelsTable(props: {
               data-search={`${displayName} ${entry.model.description} ${entry.modelId} ${entry.provider.name} ${entry.providerId} ${lab?.name ?? ""} ${entry.model.family ?? ""} ${booleanText(entry.model.reasoning)} ${booleanText(entry.model.tool_call)} ${booleanText(entry.model.structured_output)} ${booleanText(entry.model.temperature)}`}
             >
               {props.mode === "model" ? (
-                <td data-sort={entry.provider.name}>
+                <th scope="row" data-sort={entry.provider.name}>
                   <ProviderLink providerId={entry.providerId} provider={entry.provider} />
-                </td>
+                </th>
               ) : (
-                <td data-sort={displayName}>
+                <th scope="row" data-sort={displayName}>
                   {canonical ? (
                     <a class="primary-link" href={modelHref(canonical.id)}>
                       {displayName}
@@ -1156,7 +1159,7 @@ function ProviderModelsTable(props: {
                   ) : (
                     <span class="subtle">Provider-specific</span>
                   )}
-                </td>
+                </th>
               )}
               {showLab && (
                 <td data-sort={lab?.name ?? ""}>
@@ -1169,13 +1172,13 @@ function ProviderModelsTable(props: {
                   copyValue={`${entry.providerId}/${entry.modelId}`}
                 />
               </td>
-              <td data-sort={sortNumber(entry.model.limit.context)}>
+              <td class="numeric" data-sort={sortNumber(entry.model.limit.context)}>
                 {formatNumber(entry.model.limit.context)}
               </td>
-              <td data-sort={sortNumber(entry.model.limit.output)}>
+              <td class="numeric" data-sort={sortNumber(entry.model.limit.output)}>
                 {formatNumber(entry.model.limit.output)}
               </td>
-              <td data-sort={sortNumber(entry.model.cost?.input)}>
+              <td class="numeric" data-sort={sortNumber(entry.model.cost?.input)}>
                 {costSummary(entry.model.cost?.input, entry.model.cost?.output)}
               </td>
               <td data-sort={booleanText(entry.model.reasoning)}>
@@ -1252,10 +1255,27 @@ function TableSection(props: {
   );
 }
 
-function SortableTh(props: { type?: "text" | "number"; children: unknown }) {
+function SortableTh(props: {
+  type?: "text" | "number";
+  sort?: "ascending" | "descending";
+  children: unknown;
+}) {
+  const type = props.type ?? "text";
+  const indicator = (
+    <span class="sort-indicator" aria-hidden="true">
+      {props.sort === "ascending" ? "↑" : props.sort === "descending" ? "↓" : ""}
+    </span>
+  );
+
+  // Numeric columns are right-aligned, so the arrow sits on the inner side
+  // and the label edge stays flush with the numbers below it.
   return (
-    <th class="sortable" data-type={props.type ?? "text"} scope="col">
-      {props.children} <span class="sort-indicator"></span>
+    <th class="sortable" data-type={type} scope="col" aria-sort={props.sort}>
+      <button type="button" class="sort-button">
+        {type === "number" ? indicator : null}
+        {props.children}
+        {type === "text" ? indicator : null}
+      </button>
     </th>
   );
 }
@@ -1401,9 +1421,7 @@ function MobileMenu(props: { active: "models" | "providers" | "labs" }) {
   );
 }
 
-function SearchDialog(props: { items: SearchIndexItem[] }) {
-  const json = JSON.stringify(props.items).replace(/</g, "\\u003c");
-
+function SearchDialog() {
   return (
     <dialog
       id="search-modal"
@@ -1446,11 +1464,6 @@ function SearchDialog(props: { items: SearchIndexItem[] }) {
       <div id="search-count" class="search-count"></div>
       <div id="search-results" class="search-results" role="listbox"></div>
       <p id="search-empty" class="search-empty">No matching results.</p>
-      <script
-        id="search-index"
-        type="application/json"
-        dangerouslySetInnerHTML={{ __html: json }}
-      />
     </dialog>
   );
 }
@@ -1497,7 +1510,8 @@ function HelpDialog() {
         <h2>API</h2>
         <p>
           You can access provider data, provider-agnostic model metadata, or the
-          combined catalog through JSON endpoints.
+          combined catalog through JSON endpoints. Specialized model types are
+          omitted by default; the site includes all model types.
         </p>
         <div class="code-block">
           <code>
@@ -1609,7 +1623,7 @@ function countLinkedProviderEntries() {
 }
 
 function loadLabMetadata(root: string) {
-  const result = new Map<string, { description?: string }>();
+  const result = new Map<string, LabMetadataV2>();
   const labsPath = path.join(root, "labs");
   if (!existsSync(labsPath)) return result;
 
@@ -1617,18 +1631,7 @@ function loadLabMetadata(root: string) {
     const metadataPath = path.join(labsPath, labId, "lab.toml");
     if (!existsSync(metadataPath)) continue;
 
-    const metadata = Bun.TOML.parse(readFileSync(metadataPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    if (
-      metadata.description !== undefined &&
-      (typeof metadata.description !== "string" || metadata.description.length === 0)
-    ) {
-      throw new Error(`Invalid lab description in ${metadataPath}`);
-    }
-
-    result.set(labId, { description: metadata.description });
+    result.set(labId, readLabMetadata(metadataPath));
   }
 
   return result;
@@ -1685,10 +1688,8 @@ function providerLogoSvg(providerId: string) {
   if (cached) return cached;
 
   const logoPath = path.join(root, "providers", providerId, "logo.svg");
-  const defaultLogoPath = path.join(root, "providers", "logo.svg");
-  const rawSvg = readFileSync(
-    existsSync(logoPath) ? logoPath : defaultLogoPath,
-    "utf8",
+  const rawSvg = readLogo(
+    existsSync(logoPath) ? logoPath : path.join(root, "providers", "logo.svg"),
   );
   const svg = rawSvg
     .replace(/<svg\b([^>]*)>/i, (_, attributes: string) => {
@@ -1707,10 +1708,8 @@ function labLogoSvg(labId: string) {
   if (cached) return cached;
 
   const logoPath = path.join(root, "labs", labId, "logo.svg");
-  const defaultLogoPath = path.join(root, "providers", "logo.svg");
-  const rawSvg = readFileSync(
-    existsSync(logoPath) ? logoPath : defaultLogoPath,
-    "utf8",
+  const rawSvg = readLogo(
+    existsSync(logoPath) ? logoPath : path.join(root, "providers", "logo.svg"),
   );
   const svg = rawSvg
     .replace(/<svg\b([^>]*)>/i, (_, attributes: string) => {
@@ -1723,3 +1722,11 @@ function labLogoSvg(labId: string) {
   LabLogoSvgs.set(labId, svg);
   return svg;
 }
+
+function readLogo(file: string) {
+  const svg = readFileSync(file, "utf8");
+  const errors = logoErrors(svg);
+  if (errors.length > 0) throw new Error(`Unsafe logo ${file}: ${errors.join(", ")}`);
+  return svg;
+}
+

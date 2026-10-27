@@ -5,6 +5,12 @@ import { factorBaseModel } from "./openrouter.js";
 
 const API_ENDPOINT = "https://api.fireworks.ai/v1/serverless/models";
 const INVENTORY_ENDPOINT = "https://api.fireworks.ai/v1/accounts/fireworks/models";
+// Fireworks announced GLM 5.2 serverless retirement for 2026-09-25, but on
+// 2026-09-28 List Models still returns supportsServerless=true and no date.
+// https://docs.fireworks.ai/updates/changelog (2026-09-12)
+const DEPRECATION_DATE_FALLBACK: Record<string, string> = {
+  "accounts/fireworks/models/glm-5p2": "2026-09-25",
+};
 
 const FireworksPrice = z.object({
   sku: z.string().min(1),
@@ -29,15 +35,32 @@ export const FireworksModel = z.object({
   created: z.number().int().nonnegative(),
 }).passthrough();
 
+const FireworksRouter = z.object({
+  id: z.string().min(1),
+  object: z.literal("model"),
+  kind: z.literal("router"),
+  pricing_mode: z.string().min(1),
+  usage_identifier: z.string().min(1),
+}).passthrough();
+
 export const FireworksResponse = z.object({
   object: z.literal("list"),
-  data: z.array(FireworksModel),
+  // FireRouter auto shares the endpoint but routes to other models and has
+  // neither fixed modalities nor model-level token pricing.
+  // TODO: Sync routers separately once we can represent dynamic model selection and pricing.
+  data: z.array(z.union([FireworksRouter, FireworksModel]))
+    .transform((rows) => rows.filter((row): row is z.infer<typeof FireworksModel> => row.kind !== "router")),
 }).passthrough();
 
 export const FireworksInventoryModel = z.object({
   name: z.string().min(1),
   kind: z.string().min(1),
   supportsServerless: z.boolean(),
+  deprecationDate: z.object({
+    year: z.number().int().min(1),
+    month: z.number().int().min(1).max(12),
+    day: z.number().int().min(1).max(31),
+  }).nullish(),
 }).passthrough();
 
 export const FireworksInventoryResponse = z.object({
@@ -55,10 +78,13 @@ export type FireworksInventoryModel = z.infer<typeof FireworksInventoryModel>;
 export type FireworksCatalogModel = FireworksModel & {
   catalogId: string;
   flagModes: FireworksModel[];
+  // List Models reports a deprecation date for the underlying model.
+  deprecated?: true;
 };
 export type FireworksInventoryCatalogModel = {
   catalogId: string;
   inventoryOnly: true;
+  deprecated?: true;
 };
 
 type FireworksSourceModel = FireworksCatalogModel | FireworksInventoryCatalogModel;
@@ -104,14 +130,41 @@ export const fireworksAi = {
     }
     if ("inventoryOnly" in model) {
       // The shared runner validates translated models before writing them.
-      return { id: model.catalogId, model: authored as SyncedModel };
+      return {
+        id: model.catalogId,
+        model: { ...authored, status: lifecycleStatus(model, authored!.status) } as SyncedModel,
+        v2Set: { api: chatApis },
+      };
     }
     return {
       id: model.catalogId,
       model: buildFireworksModel(model, existing),
+      v2Set: { api: chatApis },
     };
   },
 } satisfies SyncProvider<FireworksSourceModel>;
+
+// Serverless text models are also served on the Responses API (POST /inference/v1/responses)
+// and the Anthropic Messages API (POST /inference/v1/messages), under the same model IDs:
+// https://docs.fireworks.ai/guides/response-api
+// https://docs.fireworks.ai/api-reference/anthropic-messages
+const EXTRA_APIS = {
+  responses: { sdk: { aisdk: "@ai-sdk/openai", opencodeai: "@opencode/ai/providers/openai-compatible/responses" } },
+  messages: { sdk: { aisdk: "@ai-sdk/anthropic", opencodeai: "@opencode/ai/providers/anthropic-compatible" } },
+};
+
+// A model's APIs: its own first table (what v1 reads; an empty table takes the
+// provider's Chat Completions API), then Responses and Messages.
+export function chatApis(current: unknown): Record<string, unknown> {
+  const { responses: _responses, messages: _messages, ...own } =
+    current !== null && typeof current === "object" && !Array.isArray(current)
+      ? current as Record<string, unknown>
+      : {};
+  return {
+    ...(Object.keys(own).length > 0 ? own : { "chat-completions": {} }),
+    ...structuredClone(EXTRA_APIS),
+  };
+}
 
 export async function fetchFireworksModels(
   key: string,
@@ -149,23 +202,41 @@ export async function fetchFireworksInventory(
 export function mergeFireworksModels(
   serverless: FireworksModel[],
   inventory: FireworksInventoryModel[],
+  now = new Date(),
 ): FireworksSourceModel[] {
   if (serverless.length === 0 || inventory.length === 0) {
     throw new Error("Fireworks AI returned an empty serverless source; refusing destructive sync");
   }
-  const expanded = expandFireworksModels(serverless);
+  const today = now.toISOString().slice(0, 10);
+  const deprecated = new Set<string>();
+  const available = inventory.filter((model) => {
+    if (!model.supportsServerless) return false;
+    const date = model.deprecationDate;
+    // A date has no time zone. Keep the model through that UTC day rather than
+    // removing it prematurely on the announced deprecation day.
+    const lastDay = date == null
+      ? DEPRECATION_DATE_FALLBACK[model.name]
+      : `${date.year}-${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}`;
+    if (lastDay !== undefined) deprecated.add(model.name);
+    return lastDay === undefined || lastDay >= today;
+  });
+  // Pricing rows can outlive serverless deployments. Only expand modes and
+  // aliases for models that the availability inventory still lists.
+  const availableIds = new Set(available.map((model) => model.name));
+  const expanded = expandFireworksModels(serverless.filter((model) => availableIds.has(model.id)))
+    .map((model) => deprecated.has(model.id) ? { ...model, deprecated: true as const } : model);
   const ids = new Set(expanded.map((model) => model.catalogId));
+  const inventoryOnly = available.filter((model) => model.kind === "HF_BASE_MODEL" && !ids.has(model.name));
+  if (!expanded.some(supportsCatalogModel) && inventoryOnly.length === 0) {
+    throw new Error("Fireworks AI returned an empty active serverless inventory; refusing destructive sync");
+  }
   return [
     ...expanded,
-    ...inventory
-      .filter((model) =>
-        model.kind === "HF_BASE_MODEL"
-        && model.supportsServerless
-        && !ids.has(model.name)
-      )
+    ...inventoryOnly
       .map((model): FireworksInventoryCatalogModel => ({
         catalogId: model.name,
         inventoryOnly: true,
+        ...(deprecated.has(model.name) ? { deprecated: true as const } : {}),
       })),
   ];
 }
@@ -197,6 +268,13 @@ export function expandFireworksModels(models: FireworksModel[]): FireworksCatalo
   function add(catalogId: string, model: FireworksModel, flagModes: FireworksModel[]) {
     if (!expanded.has(catalogId)) expanded.set(catalogId, { ...model, catalogId, flagModes });
   }
+}
+
+// A deprecation date in List Models marks the model deprecated until it is
+// removed; a model whose date was withdrawn is no longer deprecated.
+function lifecycleStatus(model: FireworksSourceModel, status: ExistingModel["status"]): ExistingModel["status"] {
+  if (model.deprecated === true) return "deprecated";
+  return status === "deprecated" ? undefined : status;
 }
 
 function supportsCatalogModel(model: FireworksSourceModel) {
@@ -332,7 +410,7 @@ export function buildFireworksModel(
     structured_output: existing.structured_output,
     knowledge: existing.knowledge,
     open_weights: openWeights,
-    status: existing.status,
+    status: lifecycleStatus(model, existing.status),
     interleaved: existing.interleaved,
     cost: modelCost,
     limit: {
@@ -348,7 +426,8 @@ export function buildFireworksModel(
     experimental: experimental(model, modelCost, existing.experimental),
   } satisfies SyncedFullModel;
 
-  return existing.base_model === undefined
-    ? values
-    : factorBaseModel(existing.base_model, values, values.limit, existing.base_model_omit);
+  if (existing.base_model === undefined) return values;
+  // Model facts belong to the lab file; a base_model file only carries host fields.
+  const { family: _family, release_date: _release, last_updated: _updated, knowledge: _knowledge, open_weights: _open, ...host } = values;
+  return factorBaseModel(existing.base_model, host, values.limit, existing.base_model_omit);
 }
