@@ -23,7 +23,14 @@ try {
       cwd: rootDir,
       followSymlinks: true,
     })) {
-      const toml = await import(path.join(rootDir, file), {
+      const filePath = path.join(rootDir, file);
+      const text = (await Bun.file(filePath).text()).trim();
+      // Alias files (a single relative path) are pointers, not model metadata;
+      // their target is validated when scanned under its own path.
+      if (/^\.\.?\/.*\.toml$/i.test(text) && !text.includes("\n") && !text.includes("=") && !text.includes("[")) {
+        continue;
+      }
+      const toml = await import(filePath, {
         with: { type: "toml" },
       }).then((mod) => mod.default);
       if (!isSchemaV2(toml)) notV2.push(file);

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mergeDeep } from "remeda";
 import { z } from "zod";
 
-import { generateModels } from "./generate.js";
+import { generateModels, loadToml } from "./generate.js";
 import {
   AuthoredModel,
   AuthoredModelShape,
@@ -54,8 +54,11 @@ export async function generateV2(
   for await (const providerPath of scanTomls(providersDir, "*/provider.toml")) {
     const providerID = path.basename(path.dirname(providerPath));
     if (IGNORED_PROVIDERS.has(providerID)) continue;
-    if ((await readToml(providerPath)).v1_alias !== undefined) continue;
+    const providerToml = await loadToml(providerPath, providerID);
+    if (providerToml === null) continue;
+    if (providerToml.v1_alias !== undefined) continue;
     const provider = await loadProviderV2(providerPath, baseModels, labsV2);
+    if (provider === null) continue;
     const nameKey = provider.name.toLowerCase();
     const existingID = nameToProviderID.get(nameKey);
     if (existingID !== undefined) {
@@ -75,10 +78,10 @@ async function loadProviderV2(
   providerPath: string,
   baseModels: Record<string, ModelMetadata>,
   labsV2: Record<string, LabModelV2>,
-): Promise<ProviderV2> {
+): Promise<ProviderV2 | null> {
   const providerDir = path.dirname(providerPath);
   const providerID = path.basename(providerDir);
-  const toml = await readToml(providerPath);
+  const toml = await loadToml(providerPath, providerID);
   const opencodeai =
     toml.opencodeai === undefined
       ? undefined
@@ -91,6 +94,15 @@ async function loadProviderV2(
 
   const modelsDir = path.join(providerDir, "models");
   if (!existsSync(modelsDir)) {
+    // On Windows/NTFS an all-colon provider's models dir may not be created
+    // because its ':'-named children can't be materialized. Skip instead of
+    // failing the build; Linux/macOS/Cloudflare keep the throw.
+    if (process.platform === "win32") {
+      console.warn(
+        `[generate-v2] skipping provider "${providerID}" (no models directory on Windows/NTFS)`,
+      );
+      return null;
+    }
     throw new Error(`Provider "${providerID}" has no models`, {
       cause: { providerPath },
     });
@@ -103,7 +115,12 @@ async function loadProviderV2(
       .split(path.sep)
       .join("/")
       .slice(0, -5);
-    const rawModel = { ...(await readToml(modelPath)), id: modelID };
+    const raw = await loadToml(modelPath, modelID);
+    if (raw === null) {
+      console.warn(`[generate-v2] skipping provider model (dangling alias): ${modelPath}`);
+      continue;
+    }
+    const rawModel = { ...raw, id: modelID };
     const v1Model = modelV2ToV1(rawModel, { modelPath }, v1Provider.npm);
     const resolved = resolveV1Model(v1Model, baseModels, modelPath);
     const model = withV2Fields(toModelV2(resolved, v1Provider), rawModel, labsV2, modelPath);
@@ -114,6 +131,15 @@ async function loadProviderV2(
   }
 
   if (Object.keys(models).length === 0) {
+    // On Windows/NTFS, ':'-named model files/dirs cannot be materialized on
+    // disk, so an all-colon provider (e.g. synthetic) ends up empty here. Skip
+    // it instead of failing the build; Linux/macOS/Cloudflare keep the throw.
+    if (process.platform === "win32") {
+      console.warn(
+        `[generate-v2] skipping provider "${providerID}" (no models materialized on Windows/NTFS)`,
+      );
+      return null;
+    }
     throw new Error(`Provider "${providerID}" has no models`, {
       cause: { providerPath },
     });
@@ -136,8 +162,9 @@ async function loadLabsV2(modelsDir: string) {
   const labs: Record<string, LabModelV2> = {};
   if (!existsSync(modelsDir)) return labs;
   for await (const modelPath of scanTomls(modelsDir, "**/*.toml")) {
-    const raw = await readToml(modelPath);
     const id = path.relative(modelsDir, modelPath).split(path.sep).join("/").slice(0, -5);
+    const raw = await loadToml(modelPath, id);
+    if (raw === null) continue;
     labs[id] = parseWithCause(LabModelV2, { ...withoutSchema(raw), id }, { modelPath, toml: raw });
   }
   return labs;
@@ -618,11 +645,6 @@ function scanTomls(cwd: string, pattern: string) {
     absolute: true,
     followSymlinks: true,
   });
-}
-
-async function readToml(filePath: string): Promise<Record<string, unknown>> {
-  const mod = await import(filePath, { with: { type: "toml" } });
-  return mod.default;
 }
 
 function parseWithCause<S extends z.ZodTypeAny>(
